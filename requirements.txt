@@ -1,0 +1,26 @@
+# Deep Research Telegram Bot Dependencies
+
+# Telegram Bot Framework (Bot API 9.3 support)
+aiogram>=3.24.0
+
+# Configuration
+pyyaml>=6.0
+
+# SGR Agent Core - Deep Research Framework
+sgr-agent-core>=0.5.1
+
+# OpenAI client (for AsyncOpenAI)
+openai>=1.0.0
+
+# HTTP API
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# Observability
+langfuse>=2.0.0
+openinference-instrumentation-openai>=0.1.0
+
+# Note: sgr-agent-core also includes:
+# - httpx (for HTTP)
+# - pydantic (for schemas)
+# - tavily-python (for web search)

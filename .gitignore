@@ -1,0 +1,33 @@
+# Environment and secrets
+.env
+config.yaml
+task.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and data
+logs/
+db/
+reports/
+*.log
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db

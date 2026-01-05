@@ -1,0 +1,36 @@
+# Deep Research Telegram Bot Configuration
+# Copy this file to config.yaml and fill in your values
+
+telegram:
+  bot_token: "YOUR_BOT_TOKEN_HERE"  # Get from @BotFather (or set TELEGRAM_BOT_TOKEN env)
+
+llm:
+  model: "gpt-4o-mini"                          # Or claude-haiku-4-5, etc.
+  api_key: "YOUR_LLM_API_KEY"                   # Or set ANTHROPIC_API_KEY env
+  api_base: "https://api.openai.com/v1"         # OpenAI-compatible endpoint
+  temperature: 0.4
+  max_tokens: 8000
+
+search:
+  provider: "tavily"
+  api_key: "YOUR_TAVILY_API_KEY"                # Or set TAVILY_API_KEY env
+  api_url: "https://api.tavily.com"
+  max_searches: 4                               # Max searches per request
+  max_results: 10                               # Results per search
+
+# SGR Agent settings (embedded agent, no separate server)
+sgr:
+  max_iterations: 10                            # Max reasoning iterations
+  max_clarifications: 3                         # Max clarification requests
+
+bot:
+  max_history_messages: 20                      # Conversation memory limit
+  stream_update_interval: 1.0                   # Seconds between message updates
+  stream_min_chars: 50                          # Min chars before update
+
+# Langfuse observability (optional, can also be set via env vars)
+# langfuse:
+#   enabled: false
+#   public_key: "pk-lf-..."
+#   secret_key: "sk-lf-..."
+#   host: "https://cloud.langfuse.com"

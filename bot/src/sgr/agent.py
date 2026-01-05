@@ -448,13 +448,15 @@ class DeepResearchAgent:
                     # Проверяем clarification
                     if context.state == AgentStatesEnum.WAITING_FOR_CLARIFICATION:
                         logger.info("Agent waiting for clarification")
+                        # Не ждём execute_task - агент приостановлен
+                        execute_task.cancel()
                         break
 
             except asyncio.CancelledError:
                 logger.info("Streaming cancelled")
 
-            # Ждём завершения execute если ещё не завершился
-            if not execute_task.done():
+            # Ждём завершения execute если ещё не завершился и не clarification
+            if context.state != AgentStatesEnum.WAITING_FOR_CLARIFICATION and not execute_task.done():
                 try:
                     await execute_task
                 except asyncio.CancelledError:

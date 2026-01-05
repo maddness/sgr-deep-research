@@ -24,3 +24,4 @@ openinference-instrumentation-openai>=0.1.0
 # - httpx (for HTTP)
 # - pydantic (for schemas)
 # - tavily-python (for web search)
+telegramify-markdown

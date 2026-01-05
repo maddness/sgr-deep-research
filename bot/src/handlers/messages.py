@@ -6,6 +6,8 @@ import uuid
 
 from aiogram import Bot, F, Router
 from aiogram.types import Message
+from aiogram.enums import ParseMode
+import telegramify_markdown
 
 from bot.src.sgr.agent import DeepResearchAgent, ResearchResult, ResearchProgress
 from bot.src.utils.config import Config
@@ -154,15 +156,11 @@ class ResearchSession:
         if not self.progress_steps:
             return "🔬 Начинаю исследование..."
 
-        lines = ["🔬 *Исследование в процессе...*\n"]
+        lines = ["🔬 Исследование...\n"]
 
-        for i, step in enumerate(self.progress_steps):
-            # Последний шаг - текущий (с анимацией)
-            if i == len(self.progress_steps) - 1:
-                lines.append(f"▶️ {step.tool_emoji} {step.description}")
-            else:
-                # Завершённые шаги
-                lines.append(f"✓ {step.tool_emoji} {step.description}")
+        # Все шаги отображаются одинаково (без галочек)
+        for step in self.progress_steps:
+            lines.append(f"{step.tool_emoji} {step.description}")
 
         # Добавляем статистику
         elapsed = time.time() - self.start_time
@@ -239,32 +237,34 @@ class ResearchSession:
     async def _send_final_result(self) -> None:
         """Send the complete research result."""
         if not self.accumulated_content:
-            await self._safe_update("❌ Исследование завершено, но ответ не был сгенерирован.")
+            await self._safe_update("❌ Ответ не был сгенерирован.")
             return
 
-        # Финализируем сообщение о прогрессе
-        if self.progress_steps and self.status_message:
-            # Обновляем прогресс - все шаги завершены
-            final_progress_lines = ["✅ *Исследование завершено*\n"]
-            for step in self.progress_steps:
-                final_progress_lines.append(f"✓ {step.tool_emoji} {step.description}")
-            duration = time.time() - self.start_time
-            final_progress_lines.append(f"\n⏱️ {duration:.0f} сек")
-            if self.progress_steps[-1].searches_done > 0:
-                final_progress_lines.append(f"🔍 Поисков: {self.progress_steps[-1].searches_done}")
-            await self._safe_update("\n".join(final_progress_lines))
+        # Прогресс-сообщение остаётся как есть (не меняем на "завершено")
 
         # Отправляем результат отдельным сообщением
         duration = time.time() - self.start_time
         footer = f"\n\n---\n⏱️ {duration:.1f} сек | 🔄 {self.iterations} итераций"
         full_content = self.accumulated_content + footer
 
-        # Split long messages
-        chunks = split_message(full_content)
+        # Конвертируем Markdown в Telegram MarkdownV2
+        try:
+            converted = telegramify_markdown.markdownify(full_content)
+            chunks = split_message(converted)
+            parse_mode = ParseMode.MARKDOWN_V2
+        except Exception as e:
+            logger.warning(f"Failed to convert markdown: {e}, sending as plain text")
+            chunks = split_message(full_content)
+            parse_mode = None
 
         # Отправляем все части как новые сообщения
         for chunk_text in chunks:
-            await self.message.answer(chunk_text)
+            try:
+                await self.message.answer(chunk_text, parse_mode=parse_mode)
+            except Exception as e:
+                # Fallback to plain text if markdown fails
+                logger.warning(f"Failed to send with markdown: {e}")
+                await self.message.answer(chunk_text)
 
 
 @router.message(F.text)

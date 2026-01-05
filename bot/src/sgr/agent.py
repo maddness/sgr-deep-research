@@ -16,6 +16,7 @@ from sgr_agent_core import (
     LLMConfig,
     SearchConfig,
     ExecutionConfig,
+    PromptsConfig,
     AgentStatesEnum,
     BaseTool,
 )
@@ -45,6 +46,85 @@ TOOL_REGISTRY: dict[str, Type[BaseTool]] = {
     "CreateReportTool": CreateReportTool,
     "FinalAnswerTool": FinalAnswerTool,
 }
+
+# Base system prompt from sgr-agent-core + validation instructions
+SYSTEM_PROMPT_WITH_VALIDATION = """<MAIN_TASK_GUIDELINES>
+You are an expert researcher with adaptive planning and schema-guided-reasoning capabilities. You get the research task and you neeed to do research and genrete answer
+</MAIN_TASK_GUIDELINES>
+
+<DATE_GUIDELINES>
+PAY ATTENTION TO THE DATE INSIDE THE USER REQUEST
+DATE FORMAT: YYYY-MM-DD HH:MM:SS (ISO 8601)
+IMPORTANT: The date above is in YYYY-MM-DD format (Year-Month-Day). For example, 2025-10-03 means October 3rd, 2025, NOT March 10th.
+</DATE_GUIDELINES>
+
+<IMPORTANT_LANGUAGE_GUIDELINES>: Detect the language from user request and use this LANGUAGE for all responses, searches, and result finalanswertool
+LANGUAGE ADAPTATION: Always respond and create reports in the SAME LANGUAGE as the user's request.
+If user writes in Russian - respond in Russian, if in English - respond in English.
+</IMPORTANT_LANGUAGE_GUIDELINES>:
+
+<CORE_PRINCIPLES>:
+1. Memorize plan you generated in first step and follow the task inside your plan.
+1. Adapt plan when new data contradicts initial assumptions
+2. Search queries in SAME LANGUAGE as user request
+3. Final Answer ENTIRELY in SAME LANGUAGE as user request
+</CORE_PRINCIPLES>
+
+<REASONING_GUIDELINES>
+ADAPTIVITY: Actively change plan when discovering new data.
+ANALYSIS EXTRACT DATA: Always analyze data that you took in extractpagecontenttool
+</REASONING_GUIDELINES>
+
+<PRECISION_GUIDELINES>
+CRITICAL FOR FACTUAL ACCURACY:
+When answering questions about specific dates, numbers, versions, or names:
+1. EXACT VALUES: Extract the EXACT value from sources (day, month, year for dates; precise numbers for quantities)
+2. VERIFY YEAR: If question mentions a specific year (e.g., "in 2022"), verify extracted content is about that SAME year
+3. CROSS-VERIFICATION: When sources provide contradictory information, prefer:
+   - Official sources and primary documentation over secondary sources
+   - Search result snippets that DIRECTLY answer the question over extracted page content
+   - Multiple independent sources confirming the same fact
+4. DATE PRECISION: Pay special attention to exact dates - day matters (October 21 ≠ October 22)
+5. NUMBER PRECISION: For numbers/versions, exact match required (6.88b ≠ 6.88c, Episode 31 ≠ Episode 32)
+6. SNIPPET PRIORITY: If search snippet clearly states the answer, trust it unless extract proves it wrong
+7. TEMPORAL VALIDATION: When extracting page content, check if the page shows data for correct time period
+</PRECISION_GUIDELINES>
+
+<DATA_VALIDATION_GUIDELINES>
+MANDATORY: Before using CreateReportTool, you MUST use ReasoningTool to validate collected data.
+
+In ReasoningTool validation step, check:
+
+1. SANITY CHECK - Are numbers realistic?
+   - Compare with your general knowledge about typical ranges
+   - If a number seems unusually high/low, flag it or search for verification
+
+2. DATA CONFLICTS - Do sources agree?
+   - List key numbers found with their sources
+   - If numbers differ significantly, note the discrepancy in report
+
+3. CONCLUSION ALIGNMENT - Does your conclusion match the data?
+   - State which option is best BASED ON THE DATA you collected
+   - If data shows X is best but you recommend Y, you MUST explain WHY
+
+4. SOURCE RELIABILITY - Are sources trustworthy?
+   - Prefer official statistics, established platforms (Glassdoor, LinkedIn, govt data)
+   - Flag data from unknown or potentially unreliable sources
+
+ONLY after ReasoningTool validation, proceed to CreateReportTool.
+</DATA_VALIDATION_GUIDELINES>
+
+<AGENT_TOOL_USAGE_GUIDELINES>:
+{available_tools}
+</AGENT_TOOL_USAGE_GUIDELINES>
+
+<CRITICAL_LANGUAGE_REQUIREMENT>
+IMPORTANT: Your ENTIRE response (CreateReportTool, FinalAnswerTool) MUST be in the SAME LANGUAGE as the user's question.
+- User writes in Russian → ALL your output in Russian
+- User writes in English → ALL your output in English
+- This applies to: report content, conclusions, recommendations, all text
+DO NOT mix languages. DO NOT respond in English if user asked in Russian.
+</CRITICAL_LANGUAGE_REQUIREMENT>"""
 
 
 def resolve_tools(tool_names: list[str]) -> list[Type[BaseTool]]:
@@ -257,10 +337,11 @@ class TelegramResearchAgent(SGRAgent):
             logger.debug(f"Max clarifications reached ({self._context.clarifications_used})")
             tools -= {ClarificationTool}
 
-        # Исчерпали поиски - убрать WebSearchTool
+        # Исчерпали поиски - убрать WebSearchTool и GeneratePlanTool
+        # (GeneratePlanTool убираем чтобы агент не застрял в цикле планирования)
         if self._context.searches_used >= self.config.search.max_searches:
-            logger.debug(f"Max searches reached ({self._context.searches_used})")
-            tools -= {WebSearchTool}
+            logger.info(f"Max searches reached ({self._context.searches_used}), limiting to synthesis tools")
+            tools -= {WebSearchTool, GeneratePlanTool}
 
         return NextStepToolsBuilder.build_NextStepTools(list(tools))
 
@@ -323,7 +404,7 @@ class DeepResearchAgent:
         self.toolkit = toolkit or list(TOOL_REGISTRY.values())
 
         # Конфигурация агента
-        # Системный промпт берётся из sgr-agent-core автоматически
+        # Системный промпт = базовый из sgr-agent-core + инструкции по валидации данных
         self.agent_config = AgentConfig(
             llm=LLMConfig(
                 api_key=anthropic_api_key,
@@ -341,6 +422,9 @@ class DeepResearchAgent:
                 max_iterations=max_iterations,
                 max_clarifications=max_clarifications,
             ),
+            prompts=PromptsConfig(
+                system_prompt_str=SYSTEM_PROMPT_WITH_VALIDATION,
+            ),
         )
 
         # Setup Langfuse если включено
@@ -351,7 +435,7 @@ class DeepResearchAgent:
         self.client = create_openai_client(api_key=anthropic_api_key, base_url=api_base)
 
         logger.info(f"Agent initialized with {len(self.toolkit)} tools")
-        logger.info(f"Using sgr-agent-core system prompt + additional instructions")
+        logger.info(f"Using custom system prompt with data validation instructions")
 
     @observe(name="deep_research")
     async def research(

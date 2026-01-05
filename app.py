@@ -99,11 +99,9 @@ async def main() -> None:
     toolkit = resolve_tools(config.agent_tools)
     logger.info(f"Resolved {len(toolkit)} tools from config: {config.agent_tools}")
 
-    # Load system prompt from config
-    system_prompt = config.system_prompt
-    logger.info(f"System prompt loaded ({len(system_prompt)} chars)")
-
     # Initialize Deep Research Agent
+    # System prompt is loaded from sgr-agent-core automatically
+    # Language is auto-detected from user's query
     logger.info("Initializing Deep Research Agent...")
     agent = DeepResearchAgent(
         anthropic_api_key=config.llm_api_key,
@@ -115,9 +113,7 @@ async def main() -> None:
         max_iterations=config.sgr_max_iterations,
         max_searches=config.max_searches,
         max_clarifications=config.sgr_max_clarifications,
-        # Tools and prompts from config
         toolkit=toolkit,
-        system_prompt=system_prompt,
         # Langfuse observability
         langfuse_enabled=config.langfuse_enabled,
         langfuse_public_key=config.langfuse_public_key,

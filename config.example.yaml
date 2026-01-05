@@ -35,9 +35,8 @@ agent:
     - CreateReportTool
     - FinalAnswerTool
 
-# Prompts configuration
-prompts:
-  system_prompt_file: "prompts/system_prompt.txt"  # Path to system prompt file
+# Note: System prompt comes from sgr-agent-core (optimized for research)
+# Language is auto-detected from user's query
 
 bot:
   max_history_messages: 20                      # Conversation memory limit

@@ -272,15 +272,10 @@ class DeepResearchAgent:
     Использует Schema-Guided Reasoning для глубокого исследования
     с поиском в интернете через Tavily.
 
-    Конфигурация (tools, prompts) загружается из config.yaml.
+    Конфигурация tools загружается из config.yaml.
+    Системный промпт берётся из sgr-agent-core (полный, оптимизированный).
+    Язык ответа определяется автоматически по языку запроса.
     """
-
-    # Дефолтный системный промпт (используется если не задан в конфиге)
-    DEFAULT_SYSTEM_PROMPT = (
-        "Ты - исследовательский AI-ассистент. "
-        "ВСЕГДА отвечай на русском языке, независимо от языка запроса или найденных источников. "
-        "Структурируй ответы с заголовками и списками для удобства чтения."
-    )
 
     def __init__(
         self,
@@ -293,9 +288,8 @@ class DeepResearchAgent:
         max_iterations: int = 10,
         max_searches: int = 4,
         max_clarifications: int = 3,
-        # Tools and prompts from config
+        # Tools from config
         toolkit: list[Type[BaseTool]] | None = None,
-        system_prompt: str | None = None,
         # Langfuse settings
         langfuse_enabled: bool = False,
         langfuse_public_key: str = "",
@@ -316,7 +310,6 @@ class DeepResearchAgent:
             max_searches: Максимум поисковых запросов
             max_clarifications: Максимум уточняющих вопросов
             toolkit: Список классов tools (из конфига)
-            system_prompt: Системный промпт (из конфига)
             langfuse_enabled: Включить трейсинг Langfuse
             langfuse_public_key: Публичный ключ Langfuse
             langfuse_secret_key: Секретный ключ Langfuse
@@ -329,10 +322,8 @@ class DeepResearchAgent:
         # Tools из конфига или дефолтные
         self.toolkit = toolkit or list(TOOL_REGISTRY.values())
 
-        # System prompt из конфига или дефолтный
-        self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
-
         # Конфигурация агента
+        # Системный промпт берётся из sgr-agent-core автоматически
         self.agent_config = AgentConfig(
             llm=LLMConfig(
                 api_key=anthropic_api_key,
@@ -360,6 +351,7 @@ class DeepResearchAgent:
         self.client = create_openai_client(api_key=anthropic_api_key, base_url=api_base)
 
         logger.info(f"Agent initialized with {len(self.toolkit)} tools")
+        logger.info(f"Using sgr-agent-core system prompt + additional instructions")
 
     @observe(name="deep_research")
     async def research(
@@ -389,16 +381,11 @@ class DeepResearchAgent:
             logger.debug(f"Langfuse tracing active for query: {last_query[:50]}...")
 
         try:
-            # Добавляем системное сообщение в начало
-            messages_with_system = [
-                {"role": "system", "content": self.system_prompt},
-                *messages,
-            ]
-
-            # Создаём агента с полной историей разговора
-            # Используем TelegramResearchAgent с динамическим контролем tools
+            # Создаём агента с историей разговора
+            # Системный промпт берётся из sgr-agent-core автоматически
+            # Дополнительные инструкции переданы через PromptsConfig
             agent = TelegramResearchAgent(
-                task_messages=messages_with_system,
+                task_messages=messages,  # только user/assistant сообщения
                 openai_client=self.client,
                 agent_config=self.agent_config,
                 toolkit=self.toolkit,

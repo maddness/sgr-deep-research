@@ -122,25 +122,6 @@ class Config:
         ]
         return self._get("agent", "tools", default=default_tools)
 
-    # Prompts configuration
-    @property
-    def system_prompt_file(self) -> str:
-        """Path to system prompt file."""
-        return self._get("prompts", "system_prompt_file", default="prompts/system_prompt.txt")
-
-    @property
-    def system_prompt(self) -> str:
-        """Load system prompt from file."""
-        prompt_path = Path(self.system_prompt_file)
-        if prompt_path.exists():
-            return prompt_path.read_text(encoding="utf-8").strip()
-        # Fallback to default prompt
-        return (
-            "Ты - исследовательский AI-ассистент. "
-            "ВСЕГДА отвечай на русском языке, независимо от языка запроса или найденных источников. "
-            "Структурируй ответы с заголовками и списками для удобства чтения."
-        )
-
     # Bot settings
     @property
     def max_history_messages(self) -> int:

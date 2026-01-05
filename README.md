@@ -35,6 +35,7 @@ sgr-deep-research/
 │   ├── handlers/          # Telegram команды и сообщения
 │   ├── sgr/               # Deep Research агент
 │   ├── api/               # HTTP API endpoints
+│   │   └── routes.py      # /api/chat, /api/health
 │   └── utils/             # Конфиг, логгер, память
 ├── logs/                  # Логи взаимодействий
 └── db/                    # База данных (зарезервировано)
@@ -72,8 +73,8 @@ ANTHROPIC_API_KEY=sk-...
 TAVILY_API_KEY=tvly-...
 TELEGRAM_BOT_TOKEN=123456789:ABC...
 
-# Опционально
-LANGFUSE_ENABLED=true
+# Опционально (по умолчанию выключено)
+LANGFUSE_ENABLED=false
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
@@ -136,7 +137,7 @@ podman compose down
 
 ```bash
 # Пример запроса
-curl -X POST http://localhost:8080/research \
+curl -X POST http://localhost:8080/api/chat \
   -H "Content-Type: application/json" \
   -d '{"query": "Что нового в Python 3.13?"}'
 ```

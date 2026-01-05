@@ -5,6 +5,7 @@ SGR Agent - встроенный Deep Research агент.
 С опциональной интеграцией Langfuse для observability.
 """
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Type, Optional
@@ -28,9 +29,77 @@ from sgr_agent_core.tools import (
     AdaptPlanTool,
     CreateReportTool,
     FinalAnswerTool,
+    NextStepToolsBuilder,
 )
 
 logger = logging.getLogger(__name__)
+
+# Registry: tool name -> tool class
+TOOL_REGISTRY: dict[str, Type[BaseTool]] = {
+    "WebSearchTool": WebSearchTool,
+    "ExtractPageContentTool": ExtractPageContentTool,
+    "GeneratePlanTool": GeneratePlanTool,
+    "ReasoningTool": ReasoningTool,
+    "ClarificationTool": ClarificationTool,
+    "AdaptPlanTool": AdaptPlanTool,
+    "CreateReportTool": CreateReportTool,
+    "FinalAnswerTool": FinalAnswerTool,
+}
+
+
+def resolve_tools(tool_names: list[str]) -> list[Type[BaseTool]]:
+    """Resolve tool names to tool classes."""
+    tools = []
+    for name in tool_names:
+        if name in TOOL_REGISTRY:
+            tools.append(TOOL_REGISTRY[name])
+        else:
+            logger.warning(f"Unknown tool: {name}, skipping")
+    return tools
+
+
+def parse_sse_tool_call(sse_data: str) -> tuple[str, str, dict] | None:
+    """
+    Parse SSE event to extract tool call info.
+
+    Returns (tool_call_id, tool_name, arguments) or None if not a tool call.
+    """
+    if not sse_data.startswith("data: "):
+        return None
+
+    json_str = sse_data[6:].strip()  # Remove "data: " prefix
+    if json_str == "[DONE]":
+        return None
+
+    try:
+        data = json.loads(json_str)
+        choices = data.get("choices", [])
+        if not choices:
+            return None
+
+        delta = choices[0].get("delta", {})
+        tool_calls = delta.get("tool_calls")
+
+        if tool_calls and len(tool_calls) > 0:
+            tc = tool_calls[0]
+            tool_id = tc.get("id", "")
+            func = tc.get("function", {})
+            tool_name = func.get("name", "")
+            arguments_str = func.get("arguments", "{}")
+
+            # Parse arguments JSON
+            try:
+                arguments = json.loads(arguments_str) if arguments_str else {}
+            except json.JSONDecodeError:
+                arguments = {}
+
+            if tool_name:
+                return (tool_id, tool_name, arguments)
+
+    except json.JSONDecodeError:
+        pass
+
+    return None
 
 # Try to import langfuse and openinference
 try:
@@ -141,32 +210,77 @@ class ResearchResult:
     progress: ResearchProgress | None = None  # Добавлено для прогресса
 
 
+class TelegramResearchAgent(SGRAgent):
+    """
+    Кастомный SGR агент с динамическим контролем tools.
+
+    Переопределяет _prepare_tools() для принудительного завершения
+    при достижении лимитов итераций, clarifications и поисков.
+
+    Tools передаются через config, а не хардкодятся.
+    """
+
+    def __init__(
+        self,
+        task_messages: list[dict],
+        openai_client: AsyncOpenAI,
+        agent_config: AgentConfig,
+        toolkit: list[Type[BaseTool]],
+        **kwargs,
+    ):
+        super().__init__(
+            task_messages=task_messages,
+            openai_client=openai_client,
+            agent_config=agent_config,
+            toolkit=toolkit,
+            **kwargs,
+        )
+
+    async def _prepare_tools(self):
+        """
+        Подготовить доступные tools на основе текущего состояния.
+
+        Динамически убирает tools при достижении лимитов:
+        - max_iterations → только CreateReportTool, FinalAnswerTool
+        - max_clarifications → убрать ClarificationTool
+        - max_searches → убрать WebSearchTool
+        """
+        tools = set(self.toolkit)
+
+        # При достижении лимита итераций - только завершающие tools
+        if self._context.iteration >= self.config.execution.max_iterations:
+            logger.info(f"Max iterations reached ({self._context.iteration}), limiting to final tools")
+            tools = {CreateReportTool, FinalAnswerTool}
+
+        # Исчерпали clarifications - убрать ClarificationTool
+        if self._context.clarifications_used >= self.config.execution.max_clarifications:
+            logger.debug(f"Max clarifications reached ({self._context.clarifications_used})")
+            tools -= {ClarificationTool}
+
+        # Исчерпали поиски - убрать WebSearchTool
+        if self._context.searches_used >= self.config.search.max_searches:
+            logger.debug(f"Max searches reached ({self._context.searches_used})")
+            tools -= {WebSearchTool}
+
+        return NextStepToolsBuilder.build_NextStepTools(list(tools))
+
+
 class DeepResearchAgent:
     """
     Deep Research агент на базе SGR Agent Core.
 
     Использует Schema-Guided Reasoning для глубокого исследования
     с поиском в интернете через Tavily.
+
+    Конфигурация (tools, prompts) загружается из config.yaml.
     """
 
-    # Системный промпт для агента
-    SYSTEM_PROMPT = (
+    # Дефолтный системный промпт (используется если не задан в конфиге)
+    DEFAULT_SYSTEM_PROMPT = (
         "Ты - исследовательский AI-ассистент. "
         "ВСЕГДА отвечай на русском языке, независимо от языка запроса или найденных источников. "
         "Структурируй ответы с заголовками и списками для удобства чтения."
     )
-
-    # Стандартный набор tools для deep research (список классов)
-    DEFAULT_TOOLS: list[Type[BaseTool]] = [
-        WebSearchTool,
-        ExtractPageContentTool,
-        GeneratePlanTool,
-        ReasoningTool,
-        ClarificationTool,
-        AdaptPlanTool,
-        CreateReportTool,
-        FinalAnswerTool,
-    ]
 
     def __init__(
         self,
@@ -179,6 +293,9 @@ class DeepResearchAgent:
         max_iterations: int = 10,
         max_searches: int = 4,
         max_clarifications: int = 3,
+        # Tools and prompts from config
+        toolkit: list[Type[BaseTool]] | None = None,
+        system_prompt: str | None = None,
         # Langfuse settings
         langfuse_enabled: bool = False,
         langfuse_public_key: str = "",
@@ -189,15 +306,17 @@ class DeepResearchAgent:
         Инициализация агента.
 
         Args:
-            anthropic_api_key: API ключ Anthropic
+            anthropic_api_key: API ключ LLM провайдера
             tavily_api_key: API ключ Tavily для веб-поиска
-            model: Модель Claude (по умолчанию Haiku 4.5)
+            model: Модель LLM
             api_base: Base URL API
             temperature: Температура генерации
             max_tokens: Максимум токенов
             max_iterations: Максимум итераций агента
             max_searches: Максимум поисковых запросов
             max_clarifications: Максимум уточняющих вопросов
+            toolkit: Список классов tools (из конфига)
+            system_prompt: Системный промпт (из конфига)
             langfuse_enabled: Включить трейсинг Langfuse
             langfuse_public_key: Публичный ключ Langfuse
             langfuse_secret_key: Секретный ключ Langfuse
@@ -207,8 +326,14 @@ class DeepResearchAgent:
         self.tavily_api_key = tavily_api_key
         self.langfuse_enabled = langfuse_enabled
 
+        # Tools из конфига или дефолтные
+        self.toolkit = toolkit or list(TOOL_REGISTRY.values())
+
+        # System prompt из конфига или дефолтный
+        self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
+
         # Конфигурация агента
-        self.config = AgentConfig(
+        self.agent_config = AgentConfig(
             llm=LLMConfig(
                 api_key=anthropic_api_key,
                 model=model,
@@ -234,8 +359,7 @@ class DeepResearchAgent:
         # OpenAI-совместимый клиент
         self.client = create_openai_client(api_key=anthropic_api_key, base_url=api_base)
 
-        # Toolkit - список классов tools
-        self.toolkit = self.DEFAULT_TOOLS
+        logger.info(f"Agent initialized with {len(self.toolkit)} tools")
 
     @observe(name="deep_research")
     async def research(
@@ -267,88 +391,87 @@ class DeepResearchAgent:
         try:
             # Добавляем системное сообщение в начало
             messages_with_system = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": self.system_prompt},
                 *messages,
             ]
 
             # Создаём агента с полной историей разговора
-            agent = SGRAgent(
+            # Используем TelegramResearchAgent с динамическим контролем tools
+            agent = TelegramResearchAgent(
                 task_messages=messages_with_system,
                 openai_client=self.client,
-                agent_config=self.config,
+                agent_config=self.agent_config,
                 toolkit=self.toolkit,
             )
 
             # Запускаем выполнение
             logger.info(f"Starting research ({len(messages)} messages): {last_query[:200]}...")
 
-            # Выполняем агента с мониторингом состояния
             context = agent._context
+            step_counter = 0
+            last_tool_id = ""
+
+            # Запускаем execute() в фоне
             execute_task = asyncio.create_task(agent.execute())
 
-            # Отслеживаем изменения для yield прогресса
-            last_iteration = 0
-            last_tool = ""
+            # Стримим события через streaming_generator
+            try:
+                async for sse_event in agent.streaming_generator.stream():
+                    # Парсим tool_call из SSE события
+                    tool_info = parse_sse_tool_call(sse_event)
 
-            # Мониторим состояние пока выполняется
-            while not execute_task.done():
-                await asyncio.sleep(0.3)
+                    if tool_info:
+                        tool_id, tool_name, arguments = tool_info
 
-                # Проверяем не ждёт ли агент clarification
-                if context.state == AgentStatesEnum.WAITING_FOR_CLARIFICATION:
-                    logger.info("Agent waiting for clarification, cancelling execute task")
-                    execute_task.cancel()
-                    try:
-                        await execute_task
-                    except asyncio.CancelledError:
-                        pass
-                    break
+                        # Пропускаем reasoning events (они имеют id с "-reasoning")
+                        # Показываем только action events (id с "-action")
+                        if "-action" in tool_id and tool_id != last_tool_id:
+                            last_tool_id = tool_id
+                            step_counter += 1
 
-                # Проверяем изменился ли шаг или инструмент
-                current_iteration = context.iteration
-                current_tool = ""
-                tool_detail = ""
+                            # Извлекаем детали из arguments
+                            tool_detail = ""
+                            if "query" in arguments:
+                                q = arguments["query"]
+                                tool_detail = q[:50] + "..." if len(q) > 50 else q
+                            elif "research_goal" in arguments:
+                                g = arguments["research_goal"]
+                                tool_detail = g[:50] + "..." if len(g) > 50 else g
+                            elif "title" in arguments:
+                                t = arguments["title"]
+                                tool_detail = t[:50] + "..." if len(t) > 50 else t
 
-                # Извлекаем информацию о текущем инструменте
-                if hasattr(context, 'current_step_reasoning') and context.current_step_reasoning:
-                    reasoning = context.current_step_reasoning
-                    # Название инструмента в function.tool_name_discriminator
-                    if hasattr(reasoning, 'function') and reasoning.function:
-                        func = reasoning.function
-                        if hasattr(func, 'tool_name_discriminator'):
-                            current_tool = func.tool_name_discriminator
-                        elif hasattr(func, 'tool_name'):
-                            current_tool = func.tool_name
-                        # Для поиска показываем query
-                        if hasattr(func, 'query') and func.query:
-                            tool_detail = func.query[:50] + "..." if len(func.query) > 50 else func.query
-                        # Для плана показываем цель
-                        elif hasattr(func, 'research_goal') and func.research_goal:
-                            tool_detail = func.research_goal[:50] + "..." if len(func.research_goal) > 50 else func.research_goal
-                        # Для отчёта показываем title
-                        elif hasattr(func, 'title') and func.title:
-                            tool_detail = func.title[:50] + "..." if len(func.title) > 50 else func.title
+                            emoji, description = get_tool_info(tool_name)
+                            if tool_detail:
+                                description = f"{description}: {tool_detail}"
 
-                # Yield прогресс если что-то изменилось
-                if current_iteration != last_iteration or current_tool != last_tool:
-                    if current_tool:
-                        emoji, description = get_tool_info(current_tool)
-                        if tool_detail:
-                            description = f"{description}: {tool_detail}"
+                            progress = ResearchProgress(
+                                step=step_counter,
+                                tool_name=tool_name,
+                                tool_emoji=emoji,
+                                description=description,
+                                searches_done=context.searches_used,
+                                is_final=False,
+                            )
 
-                        progress = ResearchProgress(
-                            step=current_iteration,
-                            tool_name=current_tool,
-                            tool_emoji=emoji,
-                            description=description,
-                            searches_done=context.searches_used,
-                            is_final=False,
-                        )
-                        logger.info(f"Yielding progress: step={current_iteration}, tool={current_tool}, detail={tool_detail[:30] if tool_detail else 'none'}")
-                        yield ResearchResult(progress=progress)
+                            logger.info(f"[Stream] Progress: step={step_counter}, tool={tool_name}")
+                            tools_used.append(tool_name)
+                            yield ResearchResult(progress=progress)
 
-                        last_iteration = current_iteration
-                        last_tool = current_tool
+                    # Проверяем clarification
+                    if context.state == AgentStatesEnum.WAITING_FOR_CLARIFICATION:
+                        logger.info("Agent waiting for clarification")
+                        break
+
+            except asyncio.CancelledError:
+                logger.info("Streaming cancelled")
+
+            # Ждём завершения execute если ещё не завершился
+            if not execute_task.done():
+                try:
+                    await execute_task
+                except asyncio.CancelledError:
+                    pass
 
             # Debug logging
             logger.info(f"Agent state: {context.state}")
@@ -358,9 +481,7 @@ class DeepResearchAgent:
             if hasattr(context, 'clarification_received'):
                 logger.info(f"Clarification received: {context.clarification_received}")
 
-            # Собираем использованные tools
-            if hasattr(context, 'tools_called'):
-                tools_used = list(context.tools_called)
+            # tools_used уже собраны во время streaming
 
             # Проверяем на ошибку
             if context.state == AgentStatesEnum.FAILED:

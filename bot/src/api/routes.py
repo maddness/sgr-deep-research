@@ -57,8 +57,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
     try:
         logger.info(f"API request: {request.query[:50]}...")
 
+        # Convert query to messages format
+        messages = [{"role": "user", "content": request.query}]
+
         async for result in _agent.research(
-            request.query,
+            messages=messages,
             user_id=request.user_id,
             session_id=request.session_id,
         ):

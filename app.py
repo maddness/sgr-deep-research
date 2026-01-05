@@ -11,7 +11,7 @@ import uvicorn
 from bot.src.handlers.commands import router as commands_router
 from bot.src.handlers.messages import router as messages_router
 from bot.src.api.routes import router as api_router, set_agent
-from bot.src.sgr.agent import DeepResearchAgent
+from bot.src.sgr.agent import DeepResearchAgent, resolve_tools
 from bot.src.utils.config import get_config
 from bot.src.utils.logger import InteractionLogger
 
@@ -95,6 +95,14 @@ async def main() -> None:
         logger.error("TAVILY_API_KEY not configured")
         sys.exit(1)
 
+    # Resolve tools from config
+    toolkit = resolve_tools(config.agent_tools)
+    logger.info(f"Resolved {len(toolkit)} tools from config: {config.agent_tools}")
+
+    # Load system prompt from config
+    system_prompt = config.system_prompt
+    logger.info(f"System prompt loaded ({len(system_prompt)} chars)")
+
     # Initialize Deep Research Agent
     logger.info("Initializing Deep Research Agent...")
     agent = DeepResearchAgent(
@@ -107,6 +115,9 @@ async def main() -> None:
         max_iterations=config.sgr_max_iterations,
         max_searches=config.max_searches,
         max_clarifications=config.sgr_max_clarifications,
+        # Tools and prompts from config
+        toolkit=toolkit,
+        system_prompt=system_prompt,
         # Langfuse observability
         langfuse_enabled=config.langfuse_enabled,
         langfuse_public_key=config.langfuse_public_key,
@@ -115,7 +126,6 @@ async def main() -> None:
     )
     logger.info(f"Agent initialized with model: {config.llm_model}")
     logger.info(f"Langfuse tracing: {'enabled' if config.langfuse_enabled else 'disabled'}")
-    logger.info(f"Tools: {[t.__name__ for t in agent.DEFAULT_TOOLS]}")
 
     # Set agent for API routes
     set_agent(agent)

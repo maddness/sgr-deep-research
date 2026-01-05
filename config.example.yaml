@@ -23,6 +23,22 @@ sgr:
   max_iterations: 10                            # Max reasoning iterations
   max_clarifications: 3                         # Max clarification requests
 
+# Agent tools (order matters for priority)
+agent:
+  tools:
+    - WebSearchTool
+    - ExtractPageContentTool
+    - GeneratePlanTool
+    - ReasoningTool
+    - ClarificationTool
+    - AdaptPlanTool
+    - CreateReportTool
+    - FinalAnswerTool
+
+# Prompts configuration
+prompts:
+  system_prompt_file: "prompts/system_prompt.txt"  # Path to system prompt file
+
 bot:
   max_history_messages: 20                      # Conversation memory limit
   stream_update_interval: 1.0                   # Seconds between message updates

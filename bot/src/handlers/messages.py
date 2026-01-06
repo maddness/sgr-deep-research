@@ -22,6 +22,24 @@ router = Router(name="messages")
 user_locks: dict[int, asyncio.Lock] = {}
 
 
+def detect_language(text: str) -> str:
+    """Detect language from text. Returns 'ru' or 'en'."""
+    # Count Cyrillic characters
+    cyrillic_count = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
+    # If more than 20% Cyrillic, assume Russian
+    if len(text) > 0 and cyrillic_count / len(text) > 0.2:
+        return "ru"
+    return "en"
+
+
+def add_language_instruction(query: str) -> str:
+    """Add language instruction to query based on detected language."""
+    lang = detect_language(query)
+    if lang == "ru":
+        return f"[IMPORTANT: RESPOND ENTIRELY IN RUSSIAN. ВСЕ ОТВЕТЫ НА РУССКОМ ЯЗЫКЕ.]\n\n{query}"
+    return query
+
+
 def get_user_lock(user_id: int) -> asyncio.Lock:
     """Get or create a lock for user."""
     if user_id not in user_locks:
@@ -101,8 +119,11 @@ class ResearchSession:
         # Get conversation memory
         memory = get_memory(self.config.max_history_messages)
 
-        # Add user message to memory
-        memory.add_user_message(user_id, query)
+        # Add language instruction to query
+        query_with_lang = add_language_instruction(query)
+
+        # Add user message to memory (with language instruction)
+        memory.add_user_message(user_id, query_with_lang)
 
         # Get full conversation history
         messages = memory.get_messages(user_id)
